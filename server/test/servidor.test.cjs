@@ -209,3 +209,22 @@ test('al cerrar la sala con «nuevo código» los móviles salen y la tele recib
   assert.notEqual(nueva.code, room.code);
   await vivo();
 });
+
+test('en la red de casa la app del micro se sirve sin subdominio y sin certificado', async () => {
+  // (montaje: el manifiesto y el service worker tienen que llegar aunque no se esté en el subdominio micro.)
+  const web = path.join(dir, 'web');
+  fs.mkdirSync(path.join(web, 'm'), { recursive: true });
+  fs.writeFileSync(path.join(web, 'm', 'index.html'), '<!doctype html><title>Micro de prueba</title>');
+  fs.writeFileSync(path.join(web, 'm', 'manifest.webmanifest'), '{}');
+  fs.writeFileSync(path.join(web, 'm', 'sw.js'), '// sw');
+  const lan = { host: `127.0.0.1:${port}` };
+  assert.equal((await raw('/manifest.webmanifest', lan)).status, 200, 'sin manifiesto no hay botón de instalar');
+  assert.equal((await raw('/sw.js', lan)).status, 200, 'sin service worker, tampoco');
+  assert.match((await raw('/m/', lan)).text, /Micro de prueba/, '/m tiene que ser la app del micro');
+  assert.doesNotMatch((await raw('/', lan)).text, /Micro/, 'la raíz sigue siendo la web informativa');
+  // Un dominio sí manda al subdominio micro.
+  const dom = { host: 'gramola.test' };
+  assert.equal((await raw('/m', dom)).status, 301);
+  assert.match((await raw('/m', dom)).headers.location, /^https:\/\/micro\.gramola\.test/);
+  await vivo();
+});

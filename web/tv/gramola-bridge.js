@@ -35,14 +35,14 @@ window.GR = (() => {
   // ------------------------------------------------------------------ ajustes guardados
   // Ajustes guardados: cada valor dentro de su rango (un localStorage tocado a mano no deja la pantalla en blanco)
   G.loadSettings = def => {
-    const s = { ...def, ...LS.get('gramola-ajustes', {}) }, R = { diff: [0, 2], delay: [0, 400], music: [0, 10], fx: [0, 10], trail: [0, 1], lyr: [0, 1], lang: [0, 1], voz: [0, 2] };
+    const s = { ...def, ...LS.get('gramola-ajustes', {}) }, R = { diff: [0, 2], delay: [0, 400], music: [0, 10], fx: [0, 10], trail: [0, 1], lyr: [0, 1], lang: [0, 1], voz: [0, 2], vozModo: [0, 2] };
     for (const k in R) { const v = Number(s[k]); s[k] = Number.isFinite(v) ? Math.max(R[k][0], Math.min(R[k][1], Math.round(v))) : def[k]; }
     return s;
   };
   let lastSettings = '';
   function persistSettings(st) {
     const j = JSON.stringify(st);
-    if (j !== lastSettings) { lastSettings = j; LS.set('gramola-ajustes', st); applyVolumes(); vozAplicar(st && st.voz); }
+    if (j !== lastSettings) { lastSettings = j; LS.set('gramola-ajustes', st); applyVolumes(); vozAplicar(st); }
   }
 
   // ------------------------------------------------------------------ red
@@ -1028,6 +1028,15 @@ window.GR = (() => {
       .catch(e => { console.warn('[quitar voces] no se pudo cargar el filtro:', e && e.message); return false; });
     return qvProm;
   }
+  const pistaSinVoz = S => !!(S && S.song && S.song.sinVoz);
+  // Ajustes → Voz de la canción: 0 quitada (con la pista preparada; si no la hay, se quita en vivo), 1 en vivo, 2 entera
+  const quierePreparada = (st, S) => (((st && st.vozModo) | 0) === 0 && pistaSinVoz(S));
+  const nivelFiltro = st => {
+    const modo = (st && st.vozModo) | 0;
+    if (modo === 2) return 0;                       // entera: no se toca
+    if (modo === 1) return Math.max(1, (st && st.voz) | 0);   // en vivo: al menos suave, si no no haría nada
+    return 2;                                       // quitada sin pista preparada: en vivo y fuerte
+  };
   function vozPoner(g, nivel) {
     if (!g || !g.ctx || g.dead) return;
     if (g.qv) { g.qv.port.postMessage({ nivel }); return; }
@@ -1046,30 +1055,45 @@ window.GR = (() => {
       } catch (e) { console.warn('[quitar voces]', e && e.message); }
     });
   }
-  function vozAplicar(nivel) {
-    const n = Math.max(0, Math.min(2, (nivel | 0) || 0));
-    const cambio = n !== vozNivel;
-    vozNivel = n;
-    if (!G.audio || !G.audio._g) return;
-    if (G.audio._sinVoz) { if (cambio) avisoVoz(); return; }   // ya suena sin voz: no hay nada que filtrar
-    vozPoner(G.audio._g, n);
-  }
-  // Si la canción que suena ya viene sin voz, el ajuste no puede cambiarla a mitad: se avisa y vale para la siguiente.
-  let avisoVozAt = 0;
-  function avisoVoz() {
-    if (performance.now() - avisoVozAt < 1500) return;
-    avisoVozAt = performance.now();
-    const c = g();
-    if (c && c.toast) c.toast(vozNivel ? 'Esta canción ya viene sin voz' : 'La voz vuelve en la próxima canción');
+  function vozAplicar(st) {
+    st = st || {};
+    const c = g(), a = G.audio;
+    if (!c || !a) return;
+    const S = SONGS[c.state.songSel];
+    const pre = quierePreparada(st, S);
+    // Cambiar de pista a mitad de canción: mismo <audio>, así el grafo de Web Audio sigue enganchado y el reloj no salta.
+    if (Boolean(a._sinVoz) !== Boolean(pre) && a._cambiarPista) a._cambiarPista(pre);
+    vozNivel = pre ? 0 : nivelFiltro(st);
+    if (a._g) vozPoner(a._g, vozNivel);
   }
   G.vozAplicar = vozAplicar;
+  G.vozNivel = () => vozNivel;
 
   // ------------------------------------------------------------------ audio de la canción y reloj
   function startAudio(chart, S) {
     stopAudio();
-    const conSinVoz = vozNivel > 0 && !!S.song.sinVoz;   // pre-procesada: la voz ya no está en el fichero
+    // Ajustes → Voz de la canción: quitada (con la pista preparada; si no la hay, en vivo), en vivo o entera.
+    const st = (g() && g().state.settings) || {};
+    const conSinVoz = quierePreparada(st, S);            // pre-procesada: la voz ya no está en el fichero
+    vozNivel = conSinVoz ? 0 : nivelFiltro(st);
     const a = new Audio(conSinVoz ? S.song.sinVoz : S.song.audioUrl);
     a._sinVoz = conSinVoz;
+    // Cambiar de pista a mitad de canción (Ajustes → Voz): mismo elemento, así el grafo de Web Audio sigue enganchado
+    // y el reloj del audio no salta de golpe: se recoloca en el mismo segundo y sigue sonando.
+    a._cambiarPista = pre => {
+      const cc = g();
+      const SS = cc && SONGS[cc.state.songSel];
+      const url = pre ? (SS && SS.song && SS.song.sinVoz) : (SS && SS.song && SS.song.audioUrl);
+      if (!url) return;
+      const pos = a.currentTime, sonando = !a.paused;
+      a._sinVoz = pre;
+      a.addEventListener('loadedmetadata', () => {
+        try { a.currentTime = pos; } catch (_) { }
+        if (sonando) a.play().catch(() => { });
+      }, { once: true });
+      a.src = url;
+      a.load();
+    };
     a.preload = 'auto';
     a.volume = vol('music');
     G.audio = a; G.clock = { at: 0, perf: 0, playing: false };
@@ -1751,11 +1775,23 @@ window.GR = (() => {
     G.stats.rebobinos = (G.stats.rebobinos || 0) + 1;
   };
 
-  let tira = null;
-  const tirarBoton = (texto, titulo, accion) => {
+  // Tira de controles del canto. Mismas fichas que usa el propio diseño para los atajos (cuadro de 48 px con el
+  // glifo dentro y la etiqueta al lado), a 96 px del borde como el resto de la pantalla. Abajo a la izquierda en el
+  // canto normal (a la altura del conmutador de variante, que va arriba a la derecha); arriba a la izquierda en
+  // Jukebox, donde el pie lo ocupa la cola de canciones.
+  let tira = null, tiraModo = '';
+  const chip = (glifo, etiqueta, accion) => {
     const b = document.createElement('button');
-    b.textContent = texto; b.title = titulo; b.style.cssText = 'cursor:pointer;font:600 22px/1 inherit;color:var(--color-text,#fff);background:rgba(0,0,0,.35);border:1px solid currentColor;padding:10px 16px';
+    b.type = 'button';
     b.onclick = accion;
+    b.style.cssText = 'display:flex;align-items:center;gap:12px;cursor:pointer;background:none;border:0;padding:0;color:inherit;font:inherit';
+    const caja = document.createElement('span');
+    caja.textContent = glifo;
+    caja.style.cssText = 'min-width:48px;height:48px;padding:0 8px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;border:2px solid currentColor';
+    const txt = document.createElement('span');
+    txt.textContent = etiqueta;
+    txt.style.cssText = 'font-size:28px;font-weight:600;white-space:nowrap';
+    b.append(caja, txt);
     return b;
   };
   setInterval(() => {
@@ -1763,11 +1799,18 @@ window.GR = (() => {
     if (!c || !document.body) return;
     if (!tira) {
       tira = document.createElement('div');
-      tira.style.cssText = 'position:fixed;right:28px;bottom:28px;display:none;gap:10px;z-index:9;align-items:center';
-      tira.appendChild(tirarBoton('⟲10', 'Rebobinar 10 segundos', () => G.rewind(10)));
-      tira.appendChild(tirarBoton('⟲30', 'Rebobinar 30 segundos', () => G.rewind(30)));
-      tira.appendChild(tirarBoton('❙❙', 'Pausa', () => { const x = g(); x && x.act('back'); }));
+      tira.style.cssText = 'position:fixed;display:none;gap:32px;align-items:center;z-index:9;color:var(--color-bg,#f3f2f2)';
+      tira.append(
+        chip('◀◀', '10 s', () => G.rewind(10)),
+        chip('◀◀', '30 s', () => G.rewind(30)),
+        chip('≡', 'Pausa', () => { const x = g(); x && x.act('back'); }));
       document.body.appendChild(tira);
+    }
+    const modo = c.state.mode === 'jukebox' ? 'jukebox' : 'canto';
+    if (modo !== tiraModo) {
+      tiraModo = modo;
+      const sitio = modo === 'jukebox' ? 'left:96px;top:54px' : 'left:96px;bottom:84px';
+      tira.style.cssText = 'position:fixed;display:none;gap:32px;align-items:center;z-index:9;color:var(--color-bg,#f3f2f2);' + sitio;
     }
     tira.style.display = c.state.screen === 'sing' ? 'flex' : 'none';
   }, 500);

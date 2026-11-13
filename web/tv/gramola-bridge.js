@@ -1640,28 +1640,55 @@ window.GR = (() => {
   // con los colores del diseño. Los botones hacen lo mismo que las teclas de siempre: pausa es «back».
   G.rewind = seg => {
     const c = g(); if (!c || !c.chart) return;
-    const S = c.state.singers, K = S.length, nuevo = Math.max(0, c.now - seg);
-    // Lo que se va a volver a cantar se borra; lo que queda por delante del punto nuevo conserva lo suyo.
-    for (const n of c.chart.notes) if (n.sl && n.start + n.dur > nuevo) { n.done = false; for (let k = 0; k < K; k++) if (n.sl[k]) n.sl[k] = n.sl[k].map(() => 0); }
-    for (const ph of c.chart.phrases) if (ph.end > nuevo) ph.done = false;
-    // Total, racha, mejor racha y doradas: se rehacen con lo que queda antes, con la regla de siempre (r > 0,6).
-    const antes = c.chart.notes.filter(n => n.sl && n.start + n.dur <= nuevo).sort((a, b) => a.start - b.start);
-    const tot = new Array(K).fill(0), racha = new Array(K).fill(0), mejor = new Array(K).fill(0), doradas = new Array(K).fill(0);
-    for (const n of antes) for (let k = 0; k < K; k++) {
-      if (!n.parts.includes(S[k].part)) continue;
-      const aciertos = n.sl[k].reduce((a, b) => a + b, 0);
-      tot[k] += aciertos * c.chart.unitP[S[k].part] * (n.type === 'gold' ? 2 : 1);
-      if (aciertos / n.sl[k].length > 0.6) { racha[k]++; mejor[k] = Math.max(mejor[k], racha[k]); if (n.type === 'gold') doradas[k]++; }
-      else racha[k] = 0;
+    const S = c.state.singers, K = S.length, ahora = c.now, nuevo = Math.max(0, ahora - seg);
+    if (nuevo >= ahora) return;
+    // El reloj de verdad es el audio (G.update pone c.now = audioNow() en cada frame): se mueve el audio, no el reloj.
+    // Se desplaza la misma cantidad que ve el reproductor, así los desfases de latencia no entran en la cuenta.
+    if (G.audio) {
+      const destino = Math.max(0, G.audio.currentTime - (ahora - nuevo));
+      try { G.audio.currentTime = destino; } catch (_) { }
+      if (G.clock) G.clock.playing = false;      // que vuelva a engancharse sin ir arrastrándose
+    }
+    c.now = nuevo;
+    // Lo que se vuelve a cantar pierde su marcador; lo que ya estaba cerrado antes del punto conserva lo suyo.
+    for (const n of c.chart.notes) {
+      if (!n.sl || n.start + n.dur <= nuevo) continue;
+      n.done = false;
+      for (let k = 0; k < K; k++) {
+        if (n.sl[k]) n.sl[k] = n.sl[k].map(() => 0);
+        if (n.vibFrom) n.vibFrom[k] = null;       // el vibrato se mide con muestras; las de después ya no valen
+        if (n.vib) n.vib[k] = [];
+      }
+    }
+    // Total, racha, mejor racha, doradas y propina de vibrato: se rehacen con las notas que quedaron cerradas,
+    // con la misma cuenta que hace G.update al cerrar una nota (incluido el tope de 10.000).
+    const tot = new Array(K).fill(0), racha = new Array(K).fill(0), mejor = new Array(K).fill(0), doradas = new Array(K).fill(0), vibratos = new Array(K).fill(0);
+    for (const n of [...c.chart.notes].sort((a, b) => a.start - b.start)) {
+      if (!n.done || !n.sl) continue;
+      for (let k = 0; k < K; k++) {
+        if (!n.parts.includes(S[k].part)) continue;
+        const largo = n.sl[k].length, aciertos = n.sl[k].reduce((x, y) => x + y, 0), r = aciertos / largo;
+        tot[k] += aciertos * c.chart.unitP[S[k].part] * (n.type === 'gold' ? 2 : 1);
+        if (r > 0.6) { racha[k]++; mejor[k] = Math.max(mejor[k], racha[k]); if (n.type === 'gold') doradas[k]++; }
+        else racha[k] = 0;
+        if (n.vibFrom && n.vibFrom[k] != null && r > 0.5) {
+          const propina = Math.min(Math.round(G.VIB.BONUS * c.chart.unitP[S[k].part] * largo * (n.type === 'gold' ? 2 : 1)), Math.max(0, 10000 - tot[k]));
+          if (propina) { tot[k] += propina; vibratos[k]++; }
+        }
+      }
     }
     for (let k = 0; k < K; k++) {
-      c.score[k] = tot[k]; c.combo[k] = racha[k]; c.best[k] = mejor[k]; c.goldHit[k] = doradas[k];
-      if (c.hist[k]) c.hist[k] = c.hist[k].filter(h => h.t <= nuevo);
+      c.score[k] = tot[k]; c.disp[k] = tot[k];
+      c.combo[k] = racha[k]; c.best[k] = mejor[k]; c.goldHit[k] = doradas[k];
+      if (c.vibs) c.vibs[k] = vibratos[k];
+      if (c.hist && c.hist[k]) c.hist[k] = c.hist[k].filter(h => h.t <= nuevo);
       c.lastP[k] = null;
+      if (c.vibAt) c.vibAt[k] = null;
+      if (c.lastRef) c.lastRef[k] = null;
     }
     c.lastEnd = null;
     if (c.pops) c.pops = c.pops.filter(p => p.t0 == null || p.t0 <= nuevo);
-    c.now = nuevo;
+    for (const ph of c.chart.phrases) if (ph.end > nuevo) ph.done = false;
     c.setState({});
     G.stats.rebobinos = (G.stats.rebobinos || 0) + 1;
   };

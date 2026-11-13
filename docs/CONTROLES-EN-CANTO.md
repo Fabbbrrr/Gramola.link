@@ -30,6 +30,36 @@ donde hacer clic — el resto de pantallas sí. Y no había forma de rebobinar.
   el futuro.
 - `disp` (el total animado) se lo lleva la animación sola hacia el número nuevo.
 
+## Lo que falló la primera vez (y por qué)
+
+La primera versión movía `c.now` y borraba marcas. En la tele salía «Fallo» al pulsar ⟲10 o ⟲30.
+
+**Causa:** `c.now` no manda. `G.update()` lo escribe en cada frame desde el reloj del audio (`c.now = audioNow()`),
+`gramola-bridge.js:1350`. Así que el reloj no volvía atrás, pero las marcas sí se borraban: cada frase que se cerraba
+después se juzgaba con cero aciertos y soltaba «Fallo». Es decir, se rompía la puntuación sin rebobinar nada.
+
+**Arreglo:** se mueve el audio (`G.audio.currentTime`, desplazado la misma cantidad que ve el reloj), se suelta el
+suavizado (`G.clock.playing = false`) para que enganche de golpe, y el recálculo copia las reglas de `G.update()` al
+cerrar una nota: `r > 0,6` para racha, doradas, y la propina de vibrato con su tope de 10.000.
+
+## Medido
+
+Con un audio falso al que se le pone `currentTime` (así corre el `G.update` de verdad, sin micro ni altavoces):
+
+| Momento | Reloj | Notas cerradas | Total (A/B) | «Fallo» |
+|---|---|---|---|---|
+| 42 s cantando | 42 | 42 | 603 / 541 | 0 |
+| tras ⟲30 | 12 | 0 | 0 / 0 | 0 |
+| +6 s | 18 | 0 | 0 / 0 | 0 |
+| +20 s | 38 | 36 | 499 / 433 | 0 |
+
+El cero de las filas de 12 y 18 s es correcto: la primera nota de la canción empieza en el segundo 18,8 (intro larga),
+así que ahí no hay nada que puntuar. Rebobinar 10 s desde el segundo 40 deja el total en 287/312 y vuelve a subir al
+volver a cantar el trozo (395 → 603). Rebobinar más atrás del principio se queda en 0.
+
+Sin comprobar en un aparato de verdad con voz real: el camino del micrófono (`frames`), que solo cambia en que las
+muestras llegan con retraso.
+
 ## Cómo se comprueba
 
 El gráfico del diseño canta solo (`q:'good'`), así que se puede medir sin micro: dejarlo cantar, rebobinar 10 s y

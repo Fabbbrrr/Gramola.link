@@ -54,7 +54,17 @@ sub("{'60':1960,'80':1980,'90':1990,'00':2000,'10':2010}[DECS[s.dec]]", "GR.deca
 sub("room:'MOKA'", "room:GR.room||'····'", name='sala')
 sub("count:this.props.lobbyPlayers??4", "count:0", name='count')
 sub("settings:{diff:1,delay:110,music:8,fx:6,trail:this.props.showTrail===false?0:1,lyr:0,lang:0}",
-    "settings:GR.loadSettings({diff:1,delay:110,music:8,fx:6,trail:1,lyr:0,lang:0})", name='ajustes')
+    "settings:GR.loadSettings({diff:1,delay:110,music:8,fx:6,trail:1,lyr:0,lang:0,voz:0})", name='ajustes')
+
+# --- quitar voces: una fila más en el menú de audio de la pausa (No · Suave · Fuerte)
+sub("if(a==='d')return this.setState({paF:Math.min(2,f+1)})",
+    "if(a==='d')return this.setState({paF:Math.min(3,f+1)})", name='pausa audio: bajar')
+sub("else this.setState({settings:{...st,delay:Math.max(0,Math.min(400,st.delay+d*10))}});}}",
+    "else if(f===2)this.setState({settings:{...st,delay:Math.max(0,Math.min(400,st.delay+d*10))}});else this.setState({settings:{...st,voz:Math.max(0,Math.min(2,(st.voz||0)+d))}});}}",
+    name='pausa audio: quitar voces')
+sub("V.paRows=[['Música',stg.music,String(stg.music)],['Efectos',stg.fx,String(stg.fx)],['Retraso del micro',Math.round(stg.delay/40),stg.delay+' ms']]",
+    "V.paRows=[['Música',stg.music,String(stg.music)],['Efectos',stg.fx,String(stg.fx)],['Retraso del micro',Math.round(stg.delay/40),stg.delay+' ms'],['Quitar voces',(stg.voz||0)*5,['No','Suave','Fuerte'][stg.voz||0]]]",
+    name='pausa audio: filas')
 sub("jq:[1,2,3,4],settings", "jq:[],settings", name='cola jukebox')
 sub("componentDidUpdate(prev,ps){if(ps&&ps.screen!==this.state.screen&&!this.trVia&&this.state.tr!=='pre')this.enter();if(prev.lobbyPlayers!==this.props.lobbyPlayers&&this.props.lobbyPlayers!=null)this.setState({count:this.props.lobbyPlayers});",
     "componentDidUpdate(prev,ps){if(ps&&ps.screen!==this.state.screen&&!this.trVia&&this.state.tr!=='pre')this.enter();", name='lobbyPlayers')

@@ -226,5 +226,8 @@ test('en la red de casa la app del micro se sirve sin subdominio y sin certifica
   const dom = { host: 'gramola.test' };
   assert.equal((await raw('/m', dom)).status, 301);
   assert.match((await raw('/m', dom)).headers.location, /^https:\/\/micro\.gramola\.test/);
+  // Y el dominio principal no se entera de lo de abajo: esos ficheros siguen sin servirse fuera del subdominio.
+  assert.equal((await raw('/manifest.webmanifest', dom)).status, 404, 'el dominio principal no cambia');
+  assert.equal((await raw('/sw.js', dom)).status, 404, 'el dominio principal no cambia');
   await vivo();
 });

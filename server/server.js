@@ -376,9 +376,10 @@ async function handleHttp(req, res) {
   const url = { pathname, search: parsed.search, searchParams: parsed.searchParams };
   const host = String(req.headers.host || '');
   if (await admin.handle(req, res, parsed)) return;   // el admin trabaja con la ruta tal cual llega (descodifica cada trozo)
-  // Subdominio micro.: la app del micro en la raíz. Fuera del subdominio se sirven igualmente sus ficheros
-  // (manifest, sw, css, js) para que se pueda instalar desde una IP de la red; la raíz sigue siendo la web.
-  if (MICRO_FILES[url.pathname] && (MICRO_HOST.test(host) || url.pathname !== '/') && (req.method === 'GET' || req.method === 'HEAD')) {
+  // Subdominio micro.: la app del micro en la raíz. En una IP o un nombre de la red se sirven también sus
+  // ficheros —el manifiesto y el service worker— porque si no no hay manera de instalar la app. El dominio
+  // principal se comporta como siempre, y la raíz de la red sigue siendo la web informativa.
+  if (MICRO_FILES[url.pathname] && (MICRO_HOST.test(host) || (esLan(host) && url.pathname !== '/')) && (req.method === 'GET' || req.method === 'HEAD')) {
     return serveStatic(req, res, MICRO_FILES[url.pathname]);
   }
   // /setup ya no existe: a la portada

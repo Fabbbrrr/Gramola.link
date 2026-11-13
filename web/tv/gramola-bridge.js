@@ -1634,6 +1634,58 @@ window.GR = (() => {
     const antes = FOCO(c.state);
     requestAnimationFrame(() => requestAnimationFrame(() => { const s = c.state; if (s.screen === 'sing' && !s.paused) return; if (FOCO(s) !== antes) zup(); }));
   };
+
+  // ---------------------------------------------------------------- controles en el canto (ratón)
+  // La pantalla de canto se pinta entera por canvas y no tiene ni un onClick, así que la tira la monta el puente
+  // con los colores del diseño. Los botones hacen lo mismo que las teclas de siempre: pausa es «back».
+  G.rewind = seg => {
+    const c = g(); if (!c || !c.chart) return;
+    const S = c.state.singers, K = S.length, nuevo = Math.max(0, c.now - seg);
+    // Lo que se va a volver a cantar se borra; lo que queda por delante del punto nuevo conserva lo suyo.
+    for (const n of c.chart.notes) if (n.sl && n.start + n.dur > nuevo) { n.done = false; for (let k = 0; k < K; k++) if (n.sl[k]) n.sl[k] = n.sl[k].map(() => 0); }
+    for (const ph of c.chart.phrases) if (ph.end > nuevo) ph.done = false;
+    // Total, racha, mejor racha y doradas: se rehacen con lo que queda antes, con la regla de siempre (r > 0,6).
+    const antes = c.chart.notes.filter(n => n.sl && n.start + n.dur <= nuevo).sort((a, b) => a.start - b.start);
+    const tot = new Array(K).fill(0), racha = new Array(K).fill(0), mejor = new Array(K).fill(0), doradas = new Array(K).fill(0);
+    for (const n of antes) for (let k = 0; k < K; k++) {
+      if (!n.parts.includes(S[k].part)) continue;
+      const aciertos = n.sl[k].reduce((a, b) => a + b, 0);
+      tot[k] += aciertos * c.chart.unitP[S[k].part] * (n.type === 'gold' ? 2 : 1);
+      if (aciertos / n.sl[k].length > 0.6) { racha[k]++; mejor[k] = Math.max(mejor[k], racha[k]); if (n.type === 'gold') doradas[k]++; }
+      else racha[k] = 0;
+    }
+    for (let k = 0; k < K; k++) {
+      c.score[k] = tot[k]; c.combo[k] = racha[k]; c.best[k] = mejor[k]; c.goldHit[k] = doradas[k];
+      if (c.hist[k]) c.hist[k] = c.hist[k].filter(h => h.t <= nuevo);
+      c.lastP[k] = null;
+    }
+    c.lastEnd = null;
+    if (c.pops) c.pops = c.pops.filter(p => p.t0 == null || p.t0 <= nuevo);
+    c.now = nuevo;
+    c.setState({});
+    G.stats.rebobinos = (G.stats.rebobinos || 0) + 1;
+  };
+
+  let tira = null;
+  const tirarBoton = (texto, titulo, accion) => {
+    const b = document.createElement('button');
+    b.textContent = texto; b.title = titulo; b.style.cssText = 'cursor:pointer;font:600 22px/1 inherit;color:var(--color-text,#fff);background:rgba(0,0,0,.35);border:1px solid currentColor;padding:10px 16px';
+    b.onclick = accion;
+    return b;
+  };
+  setInterval(() => {
+    const c = g();
+    if (!c || !document.body) return;
+    if (!tira) {
+      tira = document.createElement('div');
+      tira.style.cssText = 'position:fixed;right:28px;bottom:28px;display:none;gap:10px;z-index:9;align-items:center';
+      tira.appendChild(tirarBoton('⟲10', 'Rebobinar 10 segundos', () => G.rewind(10)));
+      tira.appendChild(tirarBoton('⟲30', 'Rebobinar 30 segundos', () => G.rewind(30)));
+      tira.appendChild(tirarBoton('❙❙', 'Pausa', () => { const x = g(); x && x.act('back'); }));
+      document.body.appendChild(tira);
+    }
+    tira.style.display = c.state.screen === 'sing' ? 'flex' : 'none';
+  }, 500);
   // Aplausos del público al salir los resultados: grabación real de 6 s (CC0, Wikimedia Commons), por Web Audio
   // para no quitarle el reproductor a la música de fondo en la tele LG
   let applauseBuf = null, applauseP = null;

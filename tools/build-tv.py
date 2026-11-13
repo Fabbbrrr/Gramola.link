@@ -106,8 +106,8 @@ sub("drawBg(c,dt){const sc=this.state.screen;", "drawBg(c,dt){if(GR.skipBg&&GR.s
 # --- mando de la tele: «Pulsa OK para continuar» (no «A»), con el glifo OK del diseño
 sub("fontSize:32,fontWeight:800}},'A'),h('span',null,'para continuar')", "fontSize:26,fontWeight:800}},'OK'),h('span',null,'para continuar')", name='Pulsa OK')
 
-# --- Ajustes sin la opción de idioma (la app solo va en castellano)
-sub("{k:'lang',label:'Idioma',type:'seg',opts:['Castellano','Català'],help:'Idioma de la interfaz en la tele y en los móviles.'},", "", name='sin idioma en Ajustes')
+# --- Ajustes: la fila de idioma se queda, con inglés. El control lo atiende el puente (web/js/i18n.js).
+sub("{k:'lang',label:'Idioma',type:'seg',opts:['Castellano','Català'],help:'Idioma de la interfaz en la tele y en los móviles.'},", "{k:'lang',label:'Idioma',type:'seg',opts:['Castellano','Català','English'],help:'Idioma de esta tele. Cada móvil elige el suyo.'},", name='idioma en Ajustes')
 
 # --- letra centrada en pantalla (el diseño la alinea a la izquierda); nunca empieza antes de x0
 sub("const base=C.bg,dim=C.n5,fill=C.red5;", "const base=C.bg,dim=C.n5,fill=C.red5;const cx=w=>Math.max(x0,960-w/2);", name='letra: centro')
@@ -297,7 +297,7 @@ sub("let l=SONGS.slice();", "let l=SONGS.filter(x=>x.id);", name='sin relleno en
 sub('<head>', '<head>\n<base href="/tv/">\n<title>Gramola</title>\n<meta name="theme-color" content="#ec3013">\n'
     '<link rel="icon" href="/assets/iconos/favicon-32.png" sizes="32x32">\n<link rel="apple-touch-icon" href="/assets/iconos/favicon-180.png">\n'
     '<style>html,body{margin:0;background:#0e0f0f;overflow:hidden;cursor:none}</style>\n'
-    '<script src="/vendor/qrcode.js"></script>\n<script src="/tv/gramola-bridge.js?v=' + VERSION + '"></script>', name='head')
+    '<script src="/vendor/qrcode.js"></script>\n<script src="/tv/gramola-bridge.js?v=' + VERSION + '"></script>\n<script src="/js/i18n.js?v=' + VERSION + '"></script>\n<script src="/js/i18n/tv.js?v=' + VERSION + '"></script>', name='head')
 
 # --- revisión del 03-nov-2026: récords comprobados en el servidor y casos límite de Pásalo/Preparar/Resultados
 # Cada fila de resultados lleva el id del jugador (el servidor solo guarda récords de jugadores de la sala) y la

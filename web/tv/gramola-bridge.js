@@ -35,14 +35,24 @@ window.GR = (() => {
   // ------------------------------------------------------------------ ajustes guardados
   // Ajustes guardados: cada valor dentro de su rango (un localStorage tocado a mano no deja la pantalla en blanco)
   G.loadSettings = def => {
-    const s = { ...def, ...LS.get('gramola-ajustes', {}) }, R = { diff: [0, 2], delay: [0, 400], music: [0, 10], fx: [0, 10], trail: [0, 1], lyr: [0, 1], lang: [0, 1] };
+    const s = { ...def, ...LS.get('gramola-ajustes', {}) }, R = { diff: [0, 2], delay: [0, 400], music: [0, 10], fx: [0, 10], trail: [0, 1], lyr: [0, 1], lang: [0, 2] };
     for (const k in R) { const v = Number(s[k]); s[k] = Number.isFinite(v) ? Math.max(R[k][0], Math.min(R[k][1], Math.round(v))) : def[k]; }
+    aplicarIdioma(s.lang);
     return s;
   };
+
+  // El idioma de la tele es el suyo; cada móvil y cada pantalla eligen el suyo (docs/I18N.md).
+  const IDIOMA_OPCIONES = ['es', 'ca', 'en'];
+  function aplicarIdioma(indice) {
+    if (!window.I18N) return;
+    const codigo = IDIOMA_OPCIONES[indice] || 'es';
+    if (window.I18N.lang !== codigo) window.I18N.cambiar(codigo);
+  }
+
   let lastSettings = '';
   function persistSettings(st) {
     const j = JSON.stringify(st);
-    if (j !== lastSettings) { lastSettings = j; LS.set('gramola-ajustes', st); applyVolumes(); }
+    if (j !== lastSettings) { lastSettings = j; LS.set('gramola-ajustes', st); applyVolumes(); aplicarIdioma(st.lang); }
   }
 
   // ------------------------------------------------------------------ red

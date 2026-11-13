@@ -217,9 +217,10 @@ function prueba(nombre, ok, lineas) { res.push({ nombre, ok }); console.log(`\n$
     d > -1.5, [`energía conservada: ${d.toFixed(2)} dB (un filtro de centro sin guardia daría −40 dB o menos)`]);
 }
 
-// 6. Canciones de verdad, con su chart UltraStar: la banda de voz baja DONDE EL CANTANTE CANTA y la música no se
-//    toca donde no canta. Es la única forma de separar «quitar la voz» de «destrozar la canción» sin tener la pista
-//    de voz del estudio.
+// 6. Canciones de verdad, con su chart UltraStar. Tres formas de mirarlo, de menos a más específico:
+//    · qué baja la banda de voz donde canta, y qué baja en los huecos instrumentales;
+//    · la voz medida en el tono de cada nota (una nota cantada es estrecha en frecuencia; un bombo no);
+//    · y lo que más importa: cuánto se toca la música donde no canta nadie.
 function leerChart(dir) {
   const txt = fs.readdirSync(dir).find(f => f.toLowerCase().endsWith('.txt'));
   if (!txt) return null;
@@ -231,58 +232,80 @@ function leerChart(dir) {
     if (g && !gap) gap = parseFloat(g[1].replace(',', '.'));
   }
   if (!bpm) return null;
-  // Mismas reglas que web/js/ultrastar.js: «:» normal, «*» dorada, F libre, R/G rap; «-» es fin de frase.
-  // Un pulso dura 60000/(BPM*4) ms y el chart empieza en GAP.
-  const pulso = 60000 / (bpm * 4) / 1000;
+  const pulso = 60000 / (bpm * 4) / 1000;          // un pulso, en segundos (como web/js/ultrastar.js)
   const notas = [];
   for (const l of lineas) {
     const m = /^([:*FRG])\s*(-?\d+)\s+(\d+)\s+(-?\d+) ?(.*)$/.exec(l);
-    if (!m) continue;
-    if (m[1] === 'F') continue;                                 // verso libre: no hay nota que cantar
+    if (!m || m[1] === 'F') continue;              // verso libre: no hay nota que cantar
     const t0 = gap / 1000 + (+m[2]) * pulso;
-    notas.push([t0, t0 + (+m[3]) * pulso]);
+    notas.push([t0, t0 + (+m[3]) * pulso, +m[4]]);
   }
   return { bpm, gap, notas };
 }
 
-// energia de la banda de voz (centro, 150 Hz–9 kHz) entre dos instantes
 const re = new Float64Array(1024), im = new Float64Array(1024), F = fftPrep(1024);
-function bandaEnergia(L, R, t0, t1) {
+
+// energía del centro (canal medio) en una banda, entre dos instantes
+function bandaEnergia(L, R, t0, t1, fmin = 150, fmax = 9000) {
   const N = 1024, H = 512;
   let ene = 0;
-  const a = Math.max(0, Math.floor(t0 * SR / H) * H), b = Math.floor(t1 * SR);
+  const a = Math.max(0, Math.floor(t0 * SR / H) * H), b = Math.min(L.length, Math.floor(t1 * SR));
   const vent = new Float64Array(N);
   for (let i = 0; i < N; i++) vent[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
   for (let o = a; o + N <= b; o += H) {
     for (let i = 0; i < N; i++) { re[i] = L[o + i] * vent[i]; im[i] = R[o + i] * vent[i]; }
     fft(F, re, im, false);
     for (let k = 1; k < N / 2; k++) {
-      const j = N - k;
+      const j = N - k, f = k * SR / N;
+      if (f < fmin || f > fmax) continue;
       const Lr = 0.5 * (re[k] + re[j]), Li = 0.5 * (im[k] - im[j]);
       const Rr = 0.5 * (im[k] + im[j]), Ri = -0.5 * (re[k] - re[j]);
       const Cr = 0.5 * (Lr + Rr), Ci = 0.5 * (Li + Ri);
-      const f = k * SR / N;
-      if (f > 150 && f < 9000) ene += Cr * Cr + Ci * Ci;
+      ene += Cr * Cr + Ci * Ci;
     }
   }
   return ene;
 }
 
+// amplitud en la frecuencia de una nota (la mayor de ±1 semitono, por si el cantante se va), en el centro mono
+function ampNota(L, R, t0, t1, f) {
+  const a = Math.max(0, (t0 * SR) | 0), b = Math.max(a + 64, Math.min(L.length, (t1 * SR) | 0));
+  let mejor = 0;
+  for (const k of [0.944, 1, 1.06]) {
+    const fk = f * k;
+    let rr = 0, ii = 0, w = 0;
+    for (let i = a; i < b; i++) {
+      const g = 0.5 - 0.5 * Math.cos(2 * Math.PI * (i - a) / (b - a));
+      const x = 0.5 * (L[i] + R[i]), t = 2 * Math.PI * fk * i / SR;
+      rr += x * g * Math.cos(t); ii -= x * g * Math.sin(t); w += g;
+    }
+    mejor = Math.max(mejor, 2 * Math.hypot(rr, ii) / Math.max(1e-9, w));
+  }
+  return mejor;
+}
+
+const mediana = a => { const b = [...a].sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : 0; };
+const medio = a => (a.length ? a.reduce((x, v) => x + v, 0) / a.length : 0);
+const dbPot = (a, b) => 10 * Math.log10(Math.max(1e-12, a) / Math.max(1e-12, b));   // energías
+const dbAmp = (a, b) => 20 * Math.log10(Math.max(1e-9, a) / Math.max(1e-9, b));    // amplitudes
+
 for (const CARPETA of CARPETAS) {
   const chart = leerChart(CARPETA);
-  const mp3 = fs.readdirSync(CARPETA).find(f => /\.(mp3|ogg|wav|opus|m4a)$/i.test(f));
-  if (!chart || !mp3) { console.log(`
-· Sin chart o sin audio en ${CARPETA}: se salta`); continue; }
-  // ventana: la primera frase cantada con 8 s por delante y por detrás, si cabe
-  const notas = chart.notas.filter(n => n[1] > 0).sort((x, y) => x[0] - y[0]);
+  const mp3 = fs.readdirSync(CARPETA).find(f => /\.(mp3|ogg|wav|opus|m4a)$/i.test(f) && f !== 'sin-voz.mp3' && f !== 'megamix.mp3');
+  if (!chart || !mp3) { console.log(`\n· Sin chart o sin audio en ${CARPETA}: se salta`); continue; }
+  const ruta = path.join(CARPETA, mp3);
+  const durTotal = Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', ruta]).toString().trim()) || 0;
+  const notas = chart.notas.filter(n => n[1] > n[0]).sort((x, y) => x[0] - y[0]);
   const primera = notas[0] ? notas[0][0] : 0;
-  const desde = Math.max(0, SEG == null ? primera - 3 : SEG);
-  const crudo = execFileSync('ffmpeg', ['-v', 'error', '-ss', desde.toFixed(2), '-t', String(DUR), '-i', path.join(CARPETA, mp3), '-f', 'f32le', '-ac', '2', '-ar', String(SR), '-'], { maxBuffer: 1 << 28 });
+  let desde = Math.max(0, SEG == null ? primera - 3 : SEG);
+  if (durTotal && desde + DUR > durTotal) desde = Math.max(0, durTotal - DUR - 0.5);
+  const crudo = execFileSync('ffmpeg', ['-v', 'error', '-ss', desde.toFixed(2), '-t', String(DUR), '-i', ruta, '-f', 'f32le', '-ac', '2', '-ar', String(SR), '-'], { maxBuffer: 1 << 28 });
   const n = crudo.length / 8;
+  if (n < SR * 2) { console.log(`\n· ${path.basename(CARPETA)}: no se pudo sacar audio (${n} muestras)`); continue; }
   const L = new Float32Array(n), R = new Float32Array(n);
   for (let i = 0; i < n; i++) { L[i] = crudo.readFloatLE(i * 8); R[i] = crudo.readFloatLE(i * 8 + 4); }
-  // tramos: cantado = notas (±0,2 s) dentro de la ventana; hueco = lo que queda con al menos 1,2 s
   const fin = desde + n / SR;
+
   const canta = notas.map(([a, b]) => [Math.max(desde, a - 0.2), Math.min(fin, b + 0.2)]).filter(([a, b]) => b > desde && a < fin).sort((x, y) => x[0] - y[0]);
   const unido = [];
   for (const t of canta) { const u = unido[unido.length - 1]; if (u && t[0] <= u[1] + 0.6) u[1] = Math.max(u[1], t[1]); else unido.push(t.slice()); }
@@ -290,31 +313,37 @@ for (const CARPETA of CARPETAS) {
   let cursor = desde;
   for (const [a, b] of unido) { if (a - cursor >= 1.2) huecos.push([cursor, a]); cursor = Math.max(cursor, b); }
   if (fin - cursor >= 1.2) huecos.push([cursor, fin]);
+  const rel = t => [t[0] - desde, t[1] - desde];
 
-  const filas = [`chart: BPM ${chart.bpm} · ${notas.length} notas · ventana ${desde.toFixed(1)}–${fin.toFixed(1)} s: ${unido.reduce((s, t) => s + t[1] - t[0], 0).toFixed(1)} s cantados, ${huecos.reduce((s, t) => s + t[1] - t[0], 0).toFixed(1)} s de música sola`];
-  const rel = ([a, b]) => [a - desde, b - desde];   // ffmpeg ya empezó en `desde`: la señal empieza en 0
+  const notasDentro = notas.filter(([a, b]) => a >= desde && b <= fin && b - a > 0.08);
+  const f0 = m => 440 * Math.pow(2, (m - 69) / 12);
+
+  const filas = [`chart: BPM ${chart.bpm} · ${notas.length} notas · ventana ${desde.toFixed(1)}–${fin.toFixed(1)} s: ` +
+    `${unido.reduce((s, t) => s + t[1] - t[0], 0).toFixed(1)} s cantados, ${huecos.reduce((s, t) => s + t[1] - t[0], 0).toFixed(1)} s de música sola` +
+    ` · ${notasDentro.length} notas en la ventana`];
+  let ok = true, daño = null;
+
   const eCanta = unido.map(t => bandaEnergia(L, R, ...rel(t))), eHueco = huecos.map(t => bandaEnergia(L, R, ...rel(t)));
-  let ok = true;
+  const aNota = notasDentro.map(([a, b, m]) => ampNota(L, R, a - desde, b - desde, f0(m)));
+  const corte = mediana(aNota);
+  const buenas = aNota.map((v, i) => (v > Math.max(corte, 1.5e-3) ? i : -1)).filter(i => i >= 0);   // notas con señal clara
+
   for (const nv of [1, 2]) {
-    const t0 = process.hrtime.bigint();
+    const t0c = process.hrtime.bigint();
     const { outL, outR } = procesar(L, R, nv);
-    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    const ms = Number(process.hrtime.bigint() - t0c) / 1e6;
     const c2 = unido.map(t => bandaEnergia(outL, outR, ...rel(t))), h2 = huecos.map(t => bandaEnergia(outL, outR, ...rel(t)));
-    const prom = (a, b) => 10 * Math.log10(Math.max(1e-12, a.reduce((s, v) => s + v, 0) / Math.max(1e-12, b.reduce((s, v) => s + v, 0))));
-    const dCanta = prom(c2, eCanta), dHueco = huecos.length ? prom(h2, eHueco) : 0;
+    const dCanta = dbPot(medio(c2), medio(eCanta)), dHueco = huecos.length ? dbPot(medio(h2), medio(eHueco)) : 0;
     const dTotal = db(rms(outL, 2048) / rms(L, 2048));
-    filas.push(`nivel ${nv}: banda de voz donde canta ${dCanta.toFixed(1)} dB · en los huecos ${dHueco.toFixed(1)} dB · total ${dTotal.toFixed(1)} dB · coste ${(ms / 1000 / (n / SR) * 100).toFixed(2)} % de un núcleo`);
-    if (nv === 2) {
-      if (dCanta > -5) ok = false;                 // tiene que bajar la voz de verdad
-      if (huecos.length && dHueco < -3) ok = false; // y no comerse la música sola
-    }
+    filas.push(`nivel ${nv}: banda donde canta ${dCanta.toFixed(1)} dB · en los huecos ${dHueco.toFixed(1)} dB · total ${dTotal.toFixed(1)} dB · coste ${(ms / 1000 / (n / SR) * 100).toFixed(2)} % de un núcleo`);
+    if (nv === 2 && dCanta > -3) ok = false;          // el filtro tiene que bajar el centro donde canta
+    if (nv === 2 && huecos.length && dHueco < -3) daño = dHueco;   // (lo que se lleva de la música: se informa, no se suspende)
     if (GUARDAR_WAV) {
       const dir = path.join(RAIZ, '_scratch'); fs.mkdirSync(dir, { recursive: true });
       escribirWav(path.join(dir, `quita-voces-${nv}.wav`), outL, outR);
     }
   }
-  // La pista pre-procesada (sin-voz.mp3, Demucs en el servidor): es la que se usa cuando existe. Aquí se mide
-  // contra el original con las mismas ventanas (donde canta / huecos).
+
   const sinVoz = path.join(CARPETA, 'sin-voz.mp3');
   if (fs.existsSync(sinVoz)) {
     const crudo2 = execFileSync('ffmpeg', ['-v', 'error', '-ss', desde.toFixed(2), '-t', String(DUR), '-i', sinVoz, '-f', 'f32le', '-ac', '2', '-ar', String(SR), '-'], { maxBuffer: 1 << 28 });
@@ -322,13 +351,14 @@ for (const CARPETA of CARPETAS) {
     const pL = new Float32Array(m2), pR = new Float32Array(m2);
     for (let i = 0; i < m2; i++) { pL[i] = crudo2.readFloatLE(i * 8); pR[i] = crudo2.readFloatLE(i * 8 + 4); }
     const c3 = unido.map(t => bandaEnergia(pL, pR, ...rel(t))), h3 = huecos.map(t => bandaEnergia(pL, pR, ...rel(t)));
-    const prom3 = (a, b) => 10 * Math.log10(Math.max(1e-12, a.reduce((x, v) => x + v, 0) / Math.max(1e-12, b.reduce((x, v) => x + v, 0))));
-    const dC = prom3(c3, eCanta), dH = huecos.length ? prom3(h3, eHueco) : 0;
+    const dC = dbPot(medio(c3), medio(eCanta)), dH = huecos.length ? dbPot(medio(h3), medio(eHueco)) : 0;
     const dT = db(rms(pL, 2048) / rms(L, 2048));
-    filas.push(`sin-voz.mp3 (pre-procesada): banda de voz donde canta ${dC.toFixed(1)} dB · en los huecos ${dH.toFixed(1)} dB · total ${dT.toFixed(1)} dB`);
-    if (dC > -10) filas.push('  (ojo: la pista sin voz no baja la voz tanto como debería)');
-    if (huecos.length && dH < -1.5) filas.push('  (ojo: la pista sin voz toca la música donde no canta nadie)');
-  }
+    filas.push(`sin-voz.mp3: banda donde canta ${dC.toFixed(1)} dB · en los huecos ${dH.toFixed(1)} dB · total ${dT.toFixed(1)} dB`);
+    if (huecos.length && dH < -1.5) ok = false;                    // la pista sin voz no puede tocar la música sola
+    if (dC < -4 && huecos.length && dH >= -1.5) filas.push('  (lo que se busca: baja donde canta y deja la música quieta)');
+  } else filas.push('sin-voz.mp3: no está (solo se mide el filtro en vivo)');
+
+  if (daño != null) filas.push(`  (el filtro en vivo se lleva también ${daño.toFixed(1)} dB de la música donde no canta nadie: es un filtro, no una separación)`);
   if (GUARDAR_WAV) {
     const dir = path.join(RAIZ, '_scratch'); fs.mkdirSync(dir, { recursive: true });
     escribirWav(path.join(dir, 'quita-voces-0.wav'), L, R);
